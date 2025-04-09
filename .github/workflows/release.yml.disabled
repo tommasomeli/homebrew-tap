@@ -1,0 +1,87 @@
+# DISABLED
+name: Create Release
+
+on:
+  push:
+    branches:
+      - main
+
+# Add explicit permissions for the workflow
+permissions:
+  contents: write  # Permission to write to the repository
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      # Avoid infinite loops by checking if the commit was made by GitHub Actions
+      - name: Check if commit was made by GitHub Actions
+        id: check_actor
+        run: |
+          ACTOR="${{ github.actor }}"
+          if [[ "$ACTOR" == "github-actions[bot]" ]]; then
+            echo "Skip: This commit was made by GitHub Actions"
+            echo "SKIP_WORKFLOW=true" >> $GITHUB_ENV
+            exit 0
+          else
+            echo "SKIP_WORKFLOW=false" >> $GITHUB_ENV
+          fi
+
+      - name: Get version from formula
+        if: env.SKIP_WORKFLOW == 'false'
+        id: get_version
+        run: |
+          VERSION=$(grep -m 1 'version "[0-9.]*"' Formula/brew-vm.rb | sed 's/.*version "\([0-9.]*\)".*/\1/')
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Create release archive
+        if: env.SKIP_WORKFLOW == 'false'
+        run: |
+          git archive --format=zip --output="brew-vm-latest.zip" HEAD
+          echo "SHA256=$(sha256sum brew-vm-latest.zip | awk '{print $1}')" >> $GITHUB_ENV
+          
+          # Create releases directory and copy the ZIP file
+          mkdir -p releases
+          cp brew-vm-latest.zip releases/
+
+      - name: Update formula
+        if: env.SKIP_WORKFLOW == 'false'
+        run: |
+          # Check if the file exists
+          if [ ! -f Formula/brew-vm.rb ]; then
+            echo "Error: Formula/brew-vm.rb not found"
+            exit 1
+          fi
+          
+          # Show the SHA256 we're using
+          echo "Using SHA256: ${{ env.SHA256 }}"
+          
+          # Show the current formula content
+          echo "Current formula content:"
+          cat Formula/brew-vm.rb
+          
+          # Update the SHA256 hash in the formula
+          sed -i "s/sha256 \"[a-f0-9]*\"/sha256 \"${{ env.SHA256 }}\"/" Formula/brew-vm.rb
+          
+          # Make sure the URL in the formula uses raw/main
+          REPO_URL="https://github.com/${{ github.repository }}"
+          sed -i "s#url \".*\"#url \"$REPO_URL/raw/main/releases/brew-vm-latest.zip\"#" Formula/brew-vm.rb
+          
+          # Verify that the changes were applied
+          echo "Updated formula content:"
+          cat Formula/brew-vm.rb
+          
+          # Commit the changes, including the new ZIP file
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git add Formula/brew-vm.rb releases/brew-vm-latest.zip
+          git commit -m "Update SHA256 hash and brew-vm-latest.zip" || echo "No changes to commit"
+          
+          # Use the GitHub token to push
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+          git push || echo "Failed to push changes. Check permissions and GitHub token."

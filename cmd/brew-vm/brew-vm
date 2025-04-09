@@ -1,0 +1,140 @@
+#!/usr/bin/env ruby
+
+# Main script for Homebrew Version Manager
+
+VERSION = "0.1.0"
+
+module BrewVM
+  module_function
+
+  # Helper methods for consistent output
+  def ohai(message)
+    puts "\033[1;34m==>\033[0m \033[1m#{message}\033[0m"
+  end
+  
+  def odie(message)
+    puts "\033[1;31mError:\033[0m #{message}"
+    exit 1
+  end
+  
+  def opoo(message)
+    puts "\033[1;33mWarning:\033[0m #{message}"
+  end
+
+  def run
+    # Handle version and help flags
+    if ARGV.include?("--version")
+      puts "brew-vm version #{VERSION}"
+      return
+    end
+
+    if ARGV.empty? || ARGV.include?("--help")
+      show_help
+      return
+    end
+
+    # Process the command
+    command = ARGV.shift
+
+    case command
+    when "use"
+      # Determine the path to the commands directory
+      commands_dir = find_commands_directory
+      if commands_dir
+        # Require use command
+        require File.join(commands_dir, "use.rb")
+        Commands::Use.run(ARGV)
+      else
+        odie "Could not find the commands directory"
+      end
+    when "set"
+      # Determine the path to the commands directory
+      commands_dir = find_commands_directory
+      if commands_dir
+        # Require set command
+        require File.join(commands_dir, "set.rb")
+        Commands::Set.run(ARGV)
+      else
+        odie "Could not find the commands directory"
+      end
+    else
+      odie "Unknown command: #{command}\nRun 'brew-vm --help' for available commands."
+    end
+  end
+
+  def find_commands_directory
+    # Try to find the commands directory based on where this script is located
+    script_dir = File.dirname(__FILE__)
+    
+    # Check for local development directory structure
+    local_dev_path = File.join(script_dir, "commands")
+    return local_dev_path if File.directory?(local_dev_path)
+    
+    # Check for Homebrew installation structure
+    homebrew_paths = [
+      # Standard Homebrew installation path relative to this script
+      File.join(script_dir, "commands"),
+      # If this script is in libexec, check for commands subdir
+      File.join(script_dir, "commands"),
+      # If this script is symlinked from bin, check relative to libexec
+      File.join(File.expand_path("../../libexec", script_dir), "commands"),
+    ]
+    
+    # Check common Homebrew Cellar locations as fallback
+    cellar_paths = [
+      "/usr/local/Cellar/brew-vm/#{VERSION}/libexec/commands",
+      "/opt/homebrew/Cellar/brew-vm/#{VERSION}/libexec/commands",
+    ]
+    
+    # Check all possible paths
+    (homebrew_paths + cellar_paths).each do |path|
+      if File.directory?(path)
+        return path
+      end
+    end
+    
+    # If all fails, try to get the path from the Homebrew command
+    brew_prefix = `brew --prefix brew-vm 2>/dev/null`.chomp
+    if $?.success? && !brew_prefix.empty?
+      brew_commands = File.join(brew_prefix, "libexec", "commands")
+      return brew_commands if File.directory?(brew_commands)
+    end
+    
+    # Log the error for debugging
+    STDERR.puts "Debug: Could not locate commands directory. Script path: #{script_dir}"
+    STDERR.puts "Debug: Tried paths: #{homebrew_paths + cellar_paths}"
+    
+    # As a last resort, try to find any files matching the pattern
+    Dir.glob(File.join(script_dir, "**", "commands")).each do |dir|
+      if File.directory?(dir) && File.exist?(File.join(dir, "use.rb"))
+        return dir
+      end
+    end
+    
+    nil
+  end
+
+  def show_help
+    puts <<~EOS
+      Homebrew Version Manager #{VERSION}
+
+      Usage:
+        brew-vm [command] [options]
+
+      Commands:
+        use <formula> <version>   - Start a new shell with specified formula version
+        set <formula> <version>   - Set a formula version as the system default
+
+      Options:
+        --version                 - Show version information
+        --help                    - Show this help message
+
+      Examples:
+        brew-vm use python 3.11   - Start a shell with Python 3.11
+        brew-vm set python 3.11   - Set Python 3.11 as default
+    EOS
+  end
+end
+
+# Run the program
+BrewVM.run 
